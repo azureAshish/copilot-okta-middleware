@@ -1,6 +1,5 @@
 from flask import Flask, request, jsonify
 import requests
-from pyngrok import ngrok
 
 app = Flask(__name__)
 
@@ -16,10 +15,12 @@ REDIRECT_URI = "https://token.botframework.com/.auth/web/redirect"
 def exchange_code():
     data = request.get_json()
     code = data.get('code')
+
     if not code:
         return jsonify({"error": "Missing authorization code"}), 400
 
     token_url = f"{OKTA_DOMAIN}/oauth2/default/v1/token"
+
     payload = {
         "grant_type": "authorization_code",
         "code": code,
@@ -35,9 +36,13 @@ def exchange_code():
         response.raise_for_status()
         return jsonify(response.json())
     except requests.exceptions.RequestException as e:
-        return jsonify({"error": str(e), "details": e.response.text if e.response else None}), 500
+        return jsonify({
+            "error": str(e),
+            "details": e.response.text if e.response else None
+        }), 500
 
-if __name__ == "__main__":
-    public_url = ngrok.connect(5000)
-    print("Public URL:", public_url)
-    app.run(port=5000)
+@app.route('/')
+def home():
+    return "Middleware is running."
+
+# Render will run: gunicorn middleware:app
