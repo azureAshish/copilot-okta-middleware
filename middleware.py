@@ -8,32 +8,31 @@ app = Flask(__name__)
 OKTA_DOMAIN = "https://integrator-4732892.okta.com"
 CLIENT_ID = "0oaxt2ry3hahA5Mwd697"
 CLIENT_SECRET = "nNb6FWbul9qhxG9W5HOh_0DsA4J_gRZ3T4ovUlnw1seW64Ig-QqwOpVdUijkoik9"
-REDIRECT_URI = "https://token.botframework.com/.auth/web/redirect"
+COPILOT_REDIRECT_URI = "https://token.botframework.com/.auth/web/redirect"
 # ===========================
-
-@app.route('/')
-def home():
-    return "Middleware is running."
 
 @app.route('/exchange-code', methods=['POST'])
 def exchange_code():
     """
-    Copilot Agent will POST {"code": "..."} here.
-    This endpoint exchanges the code for tokens with Okta.
+    Expects a JSON payload from Copilot Agent:
+    {
+        "code": "<authorization_code_from_okta>",
+        "state": "<state_value_from_copilot>"
+    }
     """
     data = request.get_json()
     code = data.get('code')
+    state = data.get('state')
 
-    if not code:
-        return jsonify({"error": "Missing authorization code"}), 400
+    if not code or not state:
+        return jsonify({"error": "Missing 'code' or 'state' in request"}), 400
 
     token_url = f"{OKTA_DOMAIN}/oauth2/default/v1/token"
 
-    # Okta expects POST with x-www-form-urlencoded
     payload = {
         "grant_type": "authorization_code",
         "code": code,
-        "redirect_uri": REDIRECT_URI,
+        "redirect_uri": COPILOT_REDIRECT_URI,
         "client_id": CLIENT_ID,
         "client_secret": CLIENT_SECRET
     }
@@ -41,15 +40,42 @@ def exchange_code():
     headers = {"Content-Type": "application/x-www-form-urlencoded"}
 
     try:
+        # Exchange code for tokens from Okta
         response = requests.post(token_url, data=payload, headers=headers)
         response.raise_for_status()
-        # Return access_token, id_token, refresh_token back to Copilot Agent
-        return jsonify(response.json())
+        tokens = response.json()
+
+        # Send tokens back to Copilot Agent
+        copilot_response = requests.post(
+            COPILOT_REDIRECT_URI,
+            json={
+                "access_token": tokens.get("access_token"),
+                "id_token": tokens.get("id_token"),
+                "refresh_token": tokens.get("refresh_token"),
+                "state": state
+            }
+        )
+
+        if copilot_response.status_code != 200:
+            return jsonify({
+                "error": "Failed sending token to Copilot",
+                "status": copilot_response.status_code,
+                "body": copilot_response.text
+            }), copilot_response.status_code
+
+        return jsonify({"message": "Tokens successfully sent to Copilot Agent"})
+
     except requests.exceptions.RequestException as e:
         return jsonify({
-            "error": "Failed exchanging code",
-            "details": e.response.text if e.response else str(e)
+            "error": str(e),
+            "details": e.response.text if e.response else None
         }), 500
 
-if __name__ == '__main__':
-    app.run(host='0.0.0.0', port=5000)
+
+@app.route('/')
+def home():
+    return "Middleware is running."
+
+
+if __name__ == "__main__":
+    app.run(debug=True)
